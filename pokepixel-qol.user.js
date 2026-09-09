@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokePixel QOL - refill / catch / hunt
 // @namespace    pp-qol
-// @version      0.6.0
+// @version      0.7.0
 // @match        https://pokepixel.nietore.com/play/*
 // @run-at       document-idle
 // @grant        none
@@ -10,7 +10,7 @@
 // @homepageURL  https://github.com/JulianoCLI/PP-QOL
 // ==/UserScript==
 (() => {
-const PP_VERSION = "0.6.0";
+const PP_VERSION = "0.7.0";
 const PP_REPO = "JulianoCLI/PP-QOL";
 const K = "pp-qol-v1";
 const cfg = Object.assign({
@@ -180,12 +180,17 @@ async function sellTick(force) {
   refreshSellPreview().catch(() => {});
   return receipt;
 }
-// ---- auto sell pokemons (opt-in, allowlist; off default) ----
+// ---- auto sell pokemons (raridade; off default) ----
+// weak/common/uncommon vendem sozinhos quando ligado; rare+ só via lista
+const MON_LOW_Q = new Set(["weak", "common", "uncommon"]);
 const sellMonFilter = { text: "" };
 function monSellable(c) {
   return !!c && (c.location === "inventory" || c.location === "storage")
     && c.captured_zone !== "starter_gift" && !c.locked
     && c.species_id !== "ditto" && !c.is_shiny && !c.mega_active;
+}
+function monQuality(c) {
+  return String(c.quality || c.q || "common").toLowerCase();
 }
 async function sellableMons() {
   try { PI().Api.invalidateDynamicCache(); } catch {}
@@ -197,15 +202,15 @@ async function sellableMons() {
   await getSpecies().catch(() => {});
   return all.map(c => {
     const sp = speciesCache[c.species_id] || {};
-    return { id: String(c.id), name: `${c.nickname || sp.name || c.species_id} lv${c.level || "?"}`, species: c.species_id, level: Number(c.level || 0), price: Math.max(25, Number(c.sell_value || 0)), locked: !!c.locked, shiny: !!c.is_shiny };
+    const q = monQuality(c);
+    return { id: String(c.id), name: `${c.nickname || sp.name || c.species_id} lv${c.level || "?"} [${q}]`, species: c.species_id, level: Number(c.level || 0), price: Math.max(25, Number(c.sell_value || 0)), locked: !!c.locked, shiny: !!c.is_shiny, quality: q, low: MON_LOW_Q.has(q) };
   });
 }
 async function sellMonCandidates() {
   if (!cfg.sellMonsOn) return [];
-  const allow = new Set((cfg.sellMons || []).map(String));
-  if (!allow.size) return [];
   const all = await sellableMons();
-  return all.filter(m => allow.has(m.id));
+  const allow = new Set((cfg.sellMons || []).map(String));
+  return all.filter(m => m.low || allow.has(m.id));
 }
 function zoneInfo(z) {
   const enc = (z.encounters || [])[0] || {};
@@ -435,7 +440,7 @@ async function refreshSellMonOptions() {
   all.forEach(m => { _ppMonMap[m.id] = m.name; });
   const t = (sellMonFilter.text || "").trim().toLowerCase();
   const allow = new Set((cfg.sellMons || []).map(String));
-  const rows = all.filter(m => !allow.has(m.id) && (!t || (m.name + " " + m.species).toLowerCase().includes(t))).slice(0, 200);
+  const rows = all.filter(m => !m.low && !allow.has(m.id) && (!t || (m.name + " " + m.species).toLowerCase().includes(t))).slice(0, 200);
   const cur = s.value;
   s.innerHTML = "";
   rows.forEach(m => {
@@ -446,13 +451,13 @@ async function refreshSellMonOptions() {
   });
   if (cur && [...s.options].some(o => o.value === cur)) s.value = cur;
   const hint = document.getElementById("pp-sm-count");
-  if (hint) hint.textContent = `${rows.length} mons vendáveis`;
+  if (hint) hint.textContent = `${rows.length} rare+ p/ escolher (fracos vendem auto)`;
 }
 function renderSellMons() {
   const d = document.getElementById("pp-sm-list");
   if (!d) return;
   const rows = cfg.sellMons || [];
-  d.innerHTML = rows.map((id, i) => `<div class=pp-skeep>${_ppMonMap[String(id)] || String(id).slice(0, 8)} <button data-i="${i}">x</button></div>`).join("") || "<div>lista vazia — nenhum pokemon será vendido</div>";
+  d.innerHTML = rows.map((id, i) => `<div class=pp-skeep>${_ppMonMap[String(id)] || String(id).slice(0, 8)} <button data-i="${i}">x</button></div>`).join("") || "<div>lista vazia — só fracos vendem</div>";
   d.querySelectorAll("button").forEach(b => b.onclick = () => { cfg.sellMons.splice(Number(b.dataset.i), 1); save(); renderSellMons(); refreshSellPreview(); });
 }
 function ui() {
@@ -554,9 +559,9 @@ function ui() {
 <div id=pp-skeep-list></div>
 <div class=pp-preview id=pp-spreview></div>
 </div>
-<div class=pp-sec><h4>Sell pokemons (opt-in)</h4>
-<label class="pp-toggle"><input type=checkbox id=pp-smOn> Vender mons da lista</label>
-<div class=pp-hint>desligado = nunca vende pokemon. ligado = vende só os ids abaixo.</div>
+<div class=pp-sec><h4>Sell pokemons (raridade)</h4>
+<label class="pp-toggle"><input type=checkbox id=pp-smOn> Vender fracos auto</label>
+<div class=pp-hint>desligado = nunca vende pokemon. ligado = weak/common/uncommon sozinhos + rare+ da lista.</div>
 <div class=pp-row><input id=pp-sm-text placeholder="buscar mon (nome/nivel)" style="flex:1"></div>
 <div class=pp-row><select id=pp-sm-sel></select><button id=pp-sm-add>+</button></div>
 <div class=pp-row><span class=lbl id=pp-sm-count style="width:auto"></span></div>

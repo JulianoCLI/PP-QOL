@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokePixel QOL - refill / catch / hunt
 // @namespace    pp-qol
-// @version      0.9.0
+// @version      0.10.0
 // @match        https://pokepixel.nietore.com/play/*
 // @run-at       document-idle
 // @grant        none
@@ -10,7 +10,7 @@
 // @homepageURL  https://github.com/JulianoCLI/PP-QOL
 // ==/UserScript==
 (() => {
-const PP_VERSION = "0.9.0";
+const PP_VERSION = "0.10.0";
 const PP_REPO = "JulianoCLI/PP-QOL";
 const K = "pp-qol-v1";
 const cfg = Object.assign({
@@ -374,10 +374,37 @@ function renderZoneOptions() {
   if (hint) hint.textContent = `${rows.length}/${zonesCache.length} zonas`;
   if (cur && rows.some(z => String(z.id) === String(cur))) zsel.value = cur;
 }
+function routeConflict(min, max, ignoreIdx) {
+  min = Number(min); max = Number(max);
+  if (!(min > 0) || !(max > 0)) return { msg: "nível inválido: use min>=1 e max>=1" };
+  if (min > max) return { msg: `faixa invertida: ${min}-${max} (min maior que max)` };
+  for (let i = 0; i < (cfg.routes || []).length; i++) {
+    if (i === ignoreIdx) continue;
+    const r = cfg.routes[i];
+    const a = Number(r.min), b = Number(r.max);
+    if (max >= a && b >= min) return { msg: `faixa ${min}-${max} sobrepõe ${a}-${b}`, idx: i };
+  }
+  return null;
+}
+function routeStatus(msg, isErr) {
+  const st = document.getElementById("pp-status");
+  if (st) { st.textContent = msg; st.style.color = isErr ? "#ff8f8f" : ""; }
+  log(msg);
+}
+function addRoute(min, max, zoneId) {
+  const err = routeConflict(min, max, -1);
+  if (err) { routeStatus("bloqueado: " + err.msg, true); return false; }
+  if (!zoneId) { routeStatus("bloqueado: escolha uma zona na busca acima", true); return false; }
+  cfg.routes.push({ min: Number(min), max: Number(max), zoneId });
+  cfg.routes.sort((x, y) => Number(x.min) - Number(y.min));
+  save(); renderRoutes();
+  routeStatus(`rota ${min}-${max} adicionada`, false);
+  return true;
+}
 function renderRoutes() {
   const d = document.getElementById("pp-routes");
   if (!d) return;
-  d.innerHTML = cfg.routes.map((r, i) => `<div>${r.min}-${r.max} → ${zoneName(r.zoneId)} <button data-i="${i}">x</button></div>`).join("") || "<div>sem rotas</div>";
+  d.innerHTML = [...cfg.routes].sort((x, y) => Number(x.min) - Number(y.min)).map(r => { const i = cfg.routes.indexOf(r); return `<div>${r.min}-${r.max} → ${zoneName(r.zoneId)} <button data-i="${i}">x</button></div>`; }).join("") || "<div>sem rotas</div>";
   d.querySelectorAll("button").forEach(b => b.onclick = () => { cfg.routes.splice(Number(b.dataset.i), 1); save(); renderRoutes(); });
 }
 function itemName(id) {
@@ -484,11 +511,16 @@ async function refreshTeamLv() {
   try { el.textContent = "time: lv" + (await teamLevel()); } catch {}
 }
 function ui() {
-  if (document.getElementById("pp-qol")) return;
+  const _old = document.getElementById("pp-qol");
+  if (_old && _old.dataset.ver === PP_VERSION) return;
+  _old?.remove();
   document.getElementById("pp-qol-tab")?.remove();
+  const _oldCss = document.getElementById("pp-qol-css");
+  if (_oldCss && _oldCss.dataset.ver !== PP_VERSION) _oldCss.remove();
   if (!document.getElementById("pp-qol-css")) {
     const st = document.createElement("style");
     st.id = "pp-qol-css";
+    st.dataset.ver = PP_VERSION;
     st.textContent = `
 #pp-qol{position:fixed;right:12px;top:50%;transform:translateY(-50%);z-index:99999;width:300px;background:linear-gradient(165deg,#1a1e30,#10121e);color:#e9ebf5;border:1px solid #333a58;border-radius:16px;box-shadow:0 14px 44px rgba(0,0,0,.6);font:12px/1.5 'PP-Term',ui-monospace,monospace;overflow:hidden;transition:transform .25s,opacity .25s}
 #pp-qol.pp-min{display:none}
@@ -515,8 +547,29 @@ function ui() {
 #pp-qol select,#pp-qol input[type=text],#pp-qol input:not([type]){background:#12152a;color:#e8eaf2;border:1px solid #343a55;border-radius:6px;padding:3px 5px;font-size:12px;max-width:100%}
 #pp-qol input[size]{width:34px}
 #pp-qol select{flex:1;min-width:0}
-#pp-add{background:#7c5cff;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-weight:700}
-#pp-add:hover{background:#6a4ef0}
+#pp-qol button{font-family:'PP-Term',ui-monospace,monospace}
+#pp-qol select,#pp-qol input{font-family:'PP-Term',ui-monospace,monospace}
+#pp-qol select option{background:#12152a;color:#e8eaf2;font-family:'PP-Term',ui-monospace,monospace}
+.pp-btn{border:none;border-radius:8px;padding:5px 12px;cursor:pointer;font-weight:700;font-size:12px;transition:filter .15s,transform .05s}
+.pp-btn:active{transform:scale(.97)}
+.pp-btn.primary{background:linear-gradient(165deg,#7c5cff,#4a3aff);color:#fff;box-shadow:0 2px 10px rgba(124,92,255,.4)}
+.pp-btn.primary:hover{filter:brightness(1.15)}
+.pp-btn.ghost{background:#232842;color:#e8eaf2;border:1px solid #3a4160}
+.pp-btn.ghost:hover{border-color:#7c5cff;background:#2a3050}
+.pp-btn.danger{background:rgba(255,90,90,.12);color:#ff8f8f;border:1px solid rgba(255,90,90,.35)}
+.pp-btn.danger:hover{background:rgba(255,90,90,.25)}
+.pp-btn.sm{padding:3px 9px;font-size:11px}
+.pp-btn.block{width:100%}
+#pp-add{background:linear-gradient(165deg,#7c5cff,#4a3aff);color:#fff;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;font-weight:700}
+#pp-add:hover{filter:brightness(1.15)}
+#pp-route-me{background:linear-gradient(165deg,#3ddc84,#1faa5c);color:#04120a;border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-weight:700}
+#pp-route-me:hover{filter:brightness(1.1)}
+#pp-sell-now{background:linear-gradient(165deg,#ffb347,#ff7b3d);color:#231100;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;font-weight:700}
+#pp-sell-now:hover{filter:brightness(1.1)}
+#pp-skeep-add,#pp-sm-add{background:#232842;color:#fff;border:1px solid #3a4160;border-radius:8px;padding:4px 10px;cursor:pointer;font-weight:700}
+#pp-skeep-add:hover,#pp-sm-add:hover{border-color:#7c5cff}
+#pp-check-update{background:none;color:#9aa0b8;border:1px solid #343a55;border-radius:8px;padding:5px;cursor:pointer;width:100%}
+#pp-check-update:hover{color:#fff;border-color:#7c5cff}
 #pp-routes div{display:flex;justify-content:space-between;background:#12152a;border:1px solid #2c3147;border-radius:6px;padding:3px 7px;margin-top:4px}
 #pp-routes button{background:none;border:none;color:#ff7b7b;cursor:pointer}
 .pp-status{font-size:11px;color:#9aa0b8;text-align:center;margin-top:4px}
@@ -543,6 +596,7 @@ function ui() {
   document.body.appendChild(tab);
   const d = document.createElement("div");
   d.id = "pp-qol";
+  d.dataset.ver = PP_VERSION;
   d.innerHTML = `
 <div class=pp-head><span><span class=pp-dot></span><b>PP-QOL</b></span><button id=pp-hide title=minimizar>–</button></div>
 <div class=pp-body>
@@ -573,14 +627,14 @@ function ui() {
 </div>
 <div class=pp-sec><h4>Rotas por nivel</h4>
 <div class=pp-hint>1-pesquise a zona acima. 2-clique + ou use o botao do seu nivel.</div>
-<div class=pp-row><span class=lbl id=pp-team-lv style="width:auto">time: lv…</span><button id=pp-route-me>+ rota do meu nivel</button></div>
-<div class=pp-row><input id=pp-rmin size=3 placeholder=1>-<input id=pp-rmax size=3 placeholder=10><button id=pp-add>+</button></div>
+<div class=pp-row><span class=lbl id=pp-team-lv style="width:auto">time: lv…</span><button id=pp-route-me class=pp-btn>+ rota do meu nivel</button></div>
+<div class=pp-row><input id=pp-rmin size=3 placeholder=1>-<input id=pp-rmax size=3 placeholder=10><button id=pp-add class=pp-btn>+ adicionar</button></div>
 <div id=pp-routes></div>
 </div>
 <div class=pp-sec><h4>Auto sell (Mark)</h4>
-<div class=pp-row>cada<input id=pp-sMin size=3 value=${cfg.sellIntervalMin}>min <button id=pp-sell-now>Vender agora</button></div>
+<div class=pp-row>cada<input id=pp-sMin size=3 value=${cfg.sellIntervalMin}>min <button id=pp-sell-now class=pp-btn>Vender agora</button></div>
 <div class=pp-row><input id=pp-skeep-text placeholder="buscar item p/ nao vender" style="flex:1"></div>
-<div class=pp-row><select id=pp-skeep-sel></select><button id=pp-skeep-add>+</button></div>
+<div class=pp-row><select id=pp-skeep-sel></select><button id=pp-skeep-add class="pp-btn ghost sm">+ evitar</button></div>
 <div class=pp-row><span class=lbl id=pp-skeep-count style="width:auto"></span></div>
 <div id=pp-skeep-list></div>
 <div class=pp-preview id=pp-spreview></div>
@@ -589,7 +643,7 @@ function ui() {
 <label class="pp-toggle"><input type=checkbox id=pp-smOn> Vender fracos auto</label>
 <div class=pp-hint>desligado = nunca vende pokemon. ligado = weak/common/uncommon sozinhos + rare+ da lista.</div>
 <div class=pp-row><input id=pp-sm-text placeholder="buscar mon (nome/nivel)" style="flex:1"></div>
-<div class=pp-row><select id=pp-sm-sel></select><button id=pp-sm-add>+</button></div>
+<div class=pp-row><select id=pp-sm-sel></select><button id=pp-sm-add class="pp-btn ghost sm">+ vender</button></div>
 <div class=pp-row><span class=lbl id=pp-sm-count style="width:auto"></span></div>
 <div id=pp-sm-list></div>
 </div>
@@ -645,15 +699,13 @@ function ui() {
   fbind("pp-fmax", v => huntFilter.max = v);
   fbind("pp-fel", v => huntFilter.el = v);
   document.getElementById("pp-add").onclick = () => {
-    cfg.routes.push({ min: +document.getElementById("pp-rmin").value || 1, max: +document.getElementById("pp-rmax").value || 10, zoneId: document.getElementById("pp-zone").value });
-    save(); renderRoutes();
+    addRoute(+document.getElementById("pp-rmin").value || 1, +document.getElementById("pp-rmax").value || 10, document.getElementById("pp-zone").value);
   };
   document.getElementById("pp-route-me").onclick = async () => {
     const lv = await teamLevel().catch(() => 0);
-    if (!lv) return;
+    if (!lv) { routeStatus("bloqueado: nível do time desconhecido", true); return; }
     const zsel = document.getElementById("pp-zone");
-    cfg.routes.push({ min: Math.max(1, lv - 2), max: lv + 2, zoneId: zsel && zsel.value });
-    save(); renderRoutes();
+    addRoute(Math.max(1, lv - 2), lv + 2, zsel && zsel.value);
   };
   document.getElementById("pp-check-update").onclick = () => checkUpdate(true);
   ppPlace(); ppHandles();
@@ -842,7 +894,7 @@ async function checkUpdate(manual) {
 
 // ---- test hooks (no side effect; ticks only run when toggled on) ----
 window.PP_QOL = { cfg, save, version: PP_VERSION, checkUpdate, invList, qtyOf, ensureStock, refillTick, queueBodies, catchTick, getZones, getShop, getSpecies, getCatalog, zoneInfo, zoneName, filteredZones, renderZoneOptions, teamLevel, currentZoneId, isInHunt, enterZone, huntTick, fillSelectors,
-  teamStatus, reviveStock, defeatVisible, recoverTick, sellCandidates, sellTick, refreshSellPreview, sellNotify, sellSummary, sellableMons, sellMonCandidates, renderSellMons, refreshSellMonOptions, refreshTeamLv,
+  teamStatus, reviveStock, defeatVisible, recoverTick, sellCandidates, sellTick, refreshSellPreview, sellNotify, sellSummary, sellableMons, sellMonCandidates, renderSellMons, refreshSellMonOptions, refreshTeamLv, addRoute, routeConflict, renderRoutes,
   _resetCatch: () => { thrown.clear(); lastThrow = 0; } };
 
 // ---- boot ----

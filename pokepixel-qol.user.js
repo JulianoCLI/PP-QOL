@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokePixel QOL - refill / catch / hunt
 // @namespace    pp-qol
-// @version      0.7.0
+// @version      0.9.0
 // @match        https://pokepixel.nietore.com/play/*
 // @run-at       document-idle
 // @grant        none
@@ -10,7 +10,7 @@
 // @homepageURL  https://github.com/JulianoCLI/PP-QOL
 // ==/UserScript==
 (() => {
-const PP_VERSION = "0.7.0";
+const PP_VERSION = "0.9.0";
 const PP_REPO = "JulianoCLI/PP-QOL";
 const K = "pp-qol-v1";
 const cfg = Object.assign({
@@ -151,10 +151,10 @@ async function sellCandidates() {
     });
 }
 async function sellTick(force) {
-  if (!cfg.sellOn && !force) return "off";
+  if (!cfg.sellOn && !cfg.sellMonsOn && !force) return "off";
   if (!force && Date.now() - Number(cfg.sellLastAt || 0) < Number(cfg.sellIntervalMin || 30) * 60000) return "wait";
-  const items = await sellCandidates();
-  const mons = await sellMonCandidates();
+  const items = (cfg.sellOn || force) ? await sellCandidates() : [];
+  const mons = (cfg.sellMonsOn || force) ? await sellMonCandidates() : [];
   if (!items.length && !mons.length) return "empty";
   let res = {}, gold = null;
   if (items.length) {
@@ -162,6 +162,7 @@ async function sellTick(force) {
     res = await PI().Api.sellShopItems(payload);
     gold = res.gold ?? res.total ?? gold;
   }
+  const _soldMonIds = mons.map(m => String(m.id));
   let monRes = null;
   // ponytail: lotes de 500 ids, mesmo limite do NPC
   for (let o = 0; o < mons.length; o += 500) {
@@ -176,7 +177,15 @@ async function sellTick(force) {
   };
   receipt.totalGold = receipt.items.reduce((s, x) => s + x.gold, 0) + receipt.mons.reduce((s, x) => s + x.gold, 0);
   log("sell", items.length, "itens +", mons.length, "mons, ~" + receipt.totalGold + " ouro");
+  if (_soldMonIds.length && (cfg.sellMons || []).length) {
+    const gone = new Set(_soldMonIds);
+    cfg.sellMons = cfg.sellMons.filter(id => !gone.has(String(id)));
+    _soldMonIds.forEach(id => { try { delete _ppMonMap[String(id)]; } catch {} });
+  }
+  save();
   sellNotify(receipt);
+  renderSellMons();
+  refreshSellMonOptions().catch(() => {});
   refreshSellPreview().catch(() => {});
   return receipt;
 }
@@ -309,6 +318,9 @@ function shopLabel(i, qty) {
   return `${i.name || i.item_id || i.id} — ${price} ouro${qty != null ? ` (tem ${qty})` : ""}`;
 }
 async function fillSelectors() {
+  const _active = document.activeElement && document.activeElement.id;
+  const _body = document.querySelector("#pp-qol .pp-body");
+  const _scroll = _body ? _body.scrollTop : 0;
   const [list, shop] = await Promise.all([invList().catch(() => []), getShop().catch(() => [])]);
   await getSpecies().catch(() => {});
   const qtyById = id => qtyOf(list, id);
@@ -339,6 +351,12 @@ async function fillSelectors() {
   renderSellKeep();
   refreshSellKeepOptions().catch(() => {});
   refreshSellPreview().catch(() => {});
+  refreshTeamLv().catch(() => {});
+  try {
+    const b2 = document.querySelector("#pp-qol .pp-body");
+    if (b2) b2.scrollTop = _scroll;
+    if (_active && document.getElementById(_active)) document.getElementById(_active).focus({ preventScroll: true });
+  } catch {}
 }
 function renderZoneOptions() {
   const zsel = document.getElementById("pp-zone");
@@ -460,15 +478,21 @@ function renderSellMons() {
   d.innerHTML = rows.map((id, i) => `<div class=pp-skeep>${_ppMonMap[String(id)] || String(id).slice(0, 8)} <button data-i="${i}">x</button></div>`).join("") || "<div>lista vazia — só fracos vendem</div>";
   d.querySelectorAll("button").forEach(b => b.onclick = () => { cfg.sellMons.splice(Number(b.dataset.i), 1); save(); renderSellMons(); refreshSellPreview(); });
 }
+async function refreshTeamLv() {
+  const el = document.getElementById("pp-team-lv");
+  if (!el) return;
+  try { el.textContent = "time: lv" + (await teamLevel()); } catch {}
+}
 function ui() {
   if (document.getElementById("pp-qol")) return;
+  document.getElementById("pp-qol-tab")?.remove();
   if (!document.getElementById("pp-qol-css")) {
     const st = document.createElement("style");
     st.id = "pp-qol-css";
     st.textContent = `
 #pp-qol{position:fixed;right:12px;top:50%;transform:translateY(-50%);z-index:99999;width:300px;background:linear-gradient(165deg,#1a1e30,#10121e);color:#e9ebf5;border:1px solid #333a58;border-radius:16px;box-shadow:0 14px 44px rgba(0,0,0,.6);font:12px/1.5 'PP-Term',ui-monospace,monospace;overflow:hidden;transition:transform .25s,opacity .25s}
 #pp-qol.pp-min{display:none}
-#pp-qol-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:99999;background:linear-gradient(165deg,#7c5cff,#4a3aff);color:#fff;border:none;border-radius:10px 0 0 10px;padding:10px 7px;cursor:pointer;font:700 12px system-ui;writing-mode:vertical-rl;box-shadow:0 8px 24px rgba(0,0,0,.5);display:none}
+#pp-qol-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:99999;background:linear-gradient(165deg,#7c5cff,#4a3aff);color:#fff;border:none;border-radius:10px 0 0 10px;padding:10px 7px;cursor:pointer;font:700 12px system-ui;writing-mode:vertical-rl;box-shadow:0 8px 24px rgba(0,0,0,.5);display:block}
 #pp-qol-tab.pp-show{display:block}
 .pp-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:rgba(124,92,255,.14);border-bottom:1px solid #2c3147}
 .pp-head b{font-size:13px;letter-spacing:.5px}
@@ -548,6 +572,8 @@ function ui() {
 <div class=pp-row><span class=lbl id=pp-zcount style="width:auto"></span></div>
 </div>
 <div class=pp-sec><h4>Rotas por nivel</h4>
+<div class=pp-hint>1-pesquise a zona acima. 2-clique + ou use o botao do seu nivel.</div>
+<div class=pp-row><span class=lbl id=pp-team-lv style="width:auto">time: lv…</span><button id=pp-route-me>+ rota do meu nivel</button></div>
 <div class=pp-row><input id=pp-rmin size=3 placeholder=1>-<input id=pp-rmax size=3 placeholder=10><button id=pp-add>+</button></div>
 <div id=pp-routes></div>
 </div>
@@ -574,7 +600,7 @@ function ui() {
   document.body.appendChild(d);
   const applyMin = min => { d.classList.toggle("pp-min", min); tab.classList.toggle("pp-show", min); tab.textContent = min ? "▶ PP-QOL" : "◀ PP-QOL"; cfg.uiMin = min; save(); };
   document.getElementById("pp-hide").onclick = () => applyMin(true);
-  tab.onclick = () => applyMin(false);
+  tab.onclick = () => applyMin(d.classList.contains("pp-min") ? false : true);
   applyMin(!!cfg.uiMin);
   const bind = (id, fn) => document.getElementById(id).onchange = e => {
     fn(e.target);
@@ -622,8 +648,26 @@ function ui() {
     cfg.routes.push({ min: +document.getElementById("pp-rmin").value || 1, max: +document.getElementById("pp-rmax").value || 10, zoneId: document.getElementById("pp-zone").value });
     save(); renderRoutes();
   };
+  document.getElementById("pp-route-me").onclick = async () => {
+    const lv = await teamLevel().catch(() => 0);
+    if (!lv) return;
+    const zsel = document.getElementById("pp-zone");
+    cfg.routes.push({ min: Math.max(1, lv - 2), max: lv + 2, zoneId: zsel && zsel.value });
+    save(); renderRoutes();
+  };
   document.getElementById("pp-check-update").onclick = () => checkUpdate(true);
   ppPlace(); ppHandles();
+  if (!window._ppResize) {
+    window._ppResize = true;
+    window.addEventListener("resize", () => {
+      const d = document.getElementById("pp-qol");
+      if (!d || d.classList.contains("pp-min")) return;
+      d.style.width = Math.min(520, window.innerWidth - 24, Math.max(240, cfg.uiW || 300)) + "px";
+      const r = d.getBoundingClientRect();
+      if (r.right > window.innerWidth) d.style.left = Math.max(0, window.innerWidth - r.width - 8) + "px";
+      if (r.bottom > window.innerHeight) d.style.top = Math.max(0, window.innerHeight - r.height - 8) + "px";
+    });
+  }
   fillSelectors();
   renderSellMons();
   refreshSellMonOptions().catch(() => {});
@@ -633,7 +677,7 @@ function ui() {
 function ppPlace() {
   const d = document.getElementById("pp-qol");
   if (!d) return;
-  d.style.width = Math.min(520, Math.max(240, cfg.uiW || 300)) + "px";
+  d.style.width = Math.min(520, window.innerWidth - 24, Math.max(240, cfg.uiW || 300)) + "px";
   const body = d.querySelector(".pp-body");
   if (body && cfg.uiH > 0) body.style.maxHeight = Math.min(92, Math.max(30, cfg.uiH)) + "vh";
 }
@@ -798,7 +842,7 @@ async function checkUpdate(manual) {
 
 // ---- test hooks (no side effect; ticks only run when toggled on) ----
 window.PP_QOL = { cfg, save, version: PP_VERSION, checkUpdate, invList, qtyOf, ensureStock, refillTick, queueBodies, catchTick, getZones, getShop, getSpecies, getCatalog, zoneInfo, zoneName, filteredZones, renderZoneOptions, teamLevel, currentZoneId, isInHunt, enterZone, huntTick, fillSelectors,
-  teamStatus, reviveStock, defeatVisible, recoverTick, sellCandidates, sellTick, refreshSellPreview, sellNotify, sellSummary, sellableMons, sellMonCandidates, renderSellMons, refreshSellMonOptions,
+  teamStatus, reviveStock, defeatVisible, recoverTick, sellCandidates, sellTick, refreshSellPreview, sellNotify, sellSummary, sellableMons, sellMonCandidates, renderSellMons, refreshSellMonOptions, refreshTeamLv,
   _resetCatch: () => { thrown.clear(); lastThrow = 0; } };
 
 // ---- boot ----
@@ -810,7 +854,13 @@ const t = setInterval(() => {
   setInterval(huntTick, 15000);
   setInterval(recoverTick, 2000);
   setInterval(() => sellTick().catch(e => log("sell", e.code || e.message || e)), 60000);
-  setInterval(() => { fillSelectors().catch(() => {}); refreshSellPreview().catch(() => {}); }, 60000);
+  setInterval(() => {
+    const panel = document.getElementById("pp-qol");
+    if (panel && panel.contains(document.activeElement)) { refreshSellPreview().catch(() => {}); return; }
+    fillSelectors().catch(() => {});
+    refreshSellPreview().catch(() => {});
+  }, 60000);
+  setInterval(() => { if (!document.getElementById("pp-qol")) { try { ui(); } catch {} } }, 5000);
   log("on", "v" + PP_VERSION);
   // entra na hunt na injeção; cidade nunca conta como "já na zona"
   huntTick().catch(e => log("boot hunt", e.code || e.message || e));
